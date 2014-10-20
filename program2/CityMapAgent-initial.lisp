@@ -263,18 +263,32 @@
   (let ((currOpenList (car open-closed))
         (closedList (cadr open-closed))
         (newArcCost (- cost-of-short-path (get parent 'best-path-cost)))
-        (old-gValue (get n best-path-cost)))
+        (old-gValue (get n 'best-path-cost)))
     (setf (get n 'arc-cost) newArcCost)
     (setf (get n 'action) action)
     (setf (get n 'parent) parent)
     (setf (get n 'best-path-cost) cost-of-short-path)
     (setf (get n 'least-cost-estimate) (+ cost-of-short-path (get n 'cost-to-goal-estimate)))
-    (cond ((< new-path-cost old-gValue)
-                (list (get-new-open-list currOpenList) closedList))
+    (cond ((< cost-of-short-path old-gValue)
+                (list (get-new-open-list currOpenList n) closedList))
           (t open-closed))))
 
-(defun get-new-open-list (OList)
-  ;; 
+(defun get-new-open-list (openList n)
+  ;; re-sort the list with the modified element n
+  (let ((listWithoutN (strip openList n)))
+    (cond ((null OpenList) (list n))
+          (t (let ((f-value-of-head (get (car openList) 'least-cost-estimate))
+                (f-value-of-new (get n 'least-cost-estimate)))
+            (cond ((< f-value-of-new f-value-of-head)
+                        (cons n openList))
+                  (t (cons (car openList) (get-new-open-list (cdr openList) n)))))))))
+
+(defun strip (lst n)
+  ;; removes the element 'n' from the openList 'lst',
+  ;; returns lst without 'n'
+  (cond ((null lst) nil)
+        ((equal (car lst) n) (cons (car lst) (strip (cdr lst) n)))
+        (t (strip (cdr lst) n))))
 
 (defun update-node-closed (n parent successor-fn cost-of-short-path 
                            action open-closed)
@@ -301,9 +315,11 @@
 ;   coordinates of the point represented by the state
 ; lst is an open or closed list
 ; return true if a node on lst has this point as its state
-    (cond ((equal state (car lst)) t)
-          ((null (cdr lst)) nil)
-          (t (state-on state (cdr lst)))))
+    (let* ((head-node (car lst))
+           (state-of-head (get head-node 'state)))
+        (cond ((equal state state-of-head) t)
+              ((null (cdr lst)) nil)
+              (t (state-on state (cdr lst))))))
        
 (defun add-to-open (n open)
 ; n is a node and open is the open list
@@ -311,10 +327,9 @@
 ; return the new open list
       (cond ((null open) (list n))
             (t (let ((fValue (get n 'least-cost-estimate))
-                     (fValueFirst (get (car open) 'least-cost-estimate)))
-                 (cond ((> fValue fValueFirst) (add-to-open n (cdr open)))
+                     (fValueHead (get (car open) 'least-cost-estimate)))
+                 (cond ((> fValue fValueHead) (cons (car open) (add-to-open n (cdr open))))
                        (t (cons n open)))))))
-
 
 (defun create-node 
   (point road arc-cost parent cost-of-short-path action est-goal goal-point)
@@ -345,38 +360,205 @@
   (setf (get node 'action) action)
   (setf (get  node 'best-path-cost) cost-of-short-path)
   (setf (get node 'cost-to-goal-estimate) (funcall est-goal point goal-point)) 
-  (setf (get  node `least-cost-estimate)
+  (setf (get  node 'least-cost-estimate)
         (+ cost-of-short-path (get node 'cost-to-goal-estimate)))
   node))
 
-    
 (defun get-path-and-total-cost (node)
 ; node is a node in the graph
 ; return a list consisting of two elements: the path (in terms of 
 ;    successive actions) that was taken to get to node and and 
 ;   cost of that path
-; YOU MUST WRITE THIS FUNCTION
-)
+    (let* ((result (get-path-and-total-cost-new node))
+           (path (car result))
+           (path-cost (cadr result)))
+      (list (path-condense path) path-cost)))
 
-(defun successors-CM (node )
+(defun get-path-and-total-cost-new (node)
+  ;; returns a list consisting of two elements
+  ;; 1. path
+  ;; 2. cost of path
+    (cond ((null (get node 'parent)) (list nil 0))
+          (t (let* ((result (get-path-and-total-cost-new (get node 'parent)))
+                    (path-list (car result))
+                    (path-cost (cadr result)))
+               (list (append path-list (list (get node 'action))) 
+                     (+ path-cost (get node 'arc-cost)))))))
+
+(defun path-condense (path-list)
+  ;; argument path-list: a list of actions.
+    (cond ((null (cdr path-list)) path-list)
+          ((equal (get-kth-elem (car path-list) 3) 
+                  (get-kth-elem (cadr path-list) 3))
+              (path-condense (cons (combine (car path-list) (cadr path-list)) (cddr path-list))))
+          (t (cons (car path-list) (path-condense (cdr path-list))))))
+
+(defun combine (elem1 elem2)
+  ;; returns a combined tuple of elem1 and elem2
+    (list (car elem1) (cadr elem2) (caddr elem1)))
+
+(defun get-kth-elem (lst k)
+  ;; returns the kth element of the list 'lst'
+    (cond ((= k 1) (car lst))
+          (t (get-kth-elem (cdr lst) (- k 1)))))
+
+(defun successors-CM (node)
+  ;; a wrapper and debugger function of successor-CM
+  (print (successors-CM-new node)))
+
+(defun successors-CM-new (node)
 ; node is a node in the search graph
 ; return a list of the successors of the state represented by
 ;   this node, with each successor given as
 ;   (new-point road arc-cost ) triples, such as 
 ;   ((100 122) "Kingshighway" 15)
-; YOU MUST WRITE THIS FUNCTION
-)
+    (let ((intersec-obj (on-intersection node))
+          (street-obj (on-street node))
+          (avenue-obj (on-avenue node)))
+        (cond ((not (null intersec-obj)) (get-suc-intersec node intersec-obj))
+              ((not (null street-obj)) (get-suc-street node street-obj))
+              ((not (null avenue-obj)) (get-suc-ave node avenue-obj)))))
+
+(defun on-intersection (node)
+  ;; determines whether node is on intersection.
+  ;; If yes, return the atom of intersection; Otherwise, return NIL.
+  (let* ((xy-co (get node 'state))
+         (x-co (car xy-co))
+         (y-co (cadr xy-co))
+         (intersec-atom (intern (concatenate 'string (prin1-to-string x-co) (prin1-to-string y-co)))))
+    (cond ((equal (get intersec-atom 'type) 'intersection)
+                intersec-atom)
+          (t NIL))))
+
+(defun get-suc-intersec (node intersec-obj)
+  ;; wrapper function of get-suc-intersec-new
+    (get-suc-intersec-new node (get intersec-obj 'options)))
+
+(defun get-suc-intersec-new (node option-list)
+  ;; returns a list of triples who are successors of node (which is on intersec)
+  ;; triple format: (new-point road arc-cost)
+  (let* ((name-of-head (car option-list))
+         (road-atom (intern name-of-head))
+         (type-of-head (get road-atom 'type)))
+    (cond ((equal type-of-head 'city-street)
+            (cond ((null (cdr option-list)) (get-suc-street node road-atom))
+                  (t (append (get-suc-street node road-atom) (get-suc-intersec-new node (cdr option-list))))))
+          ((equal type-of-head 'avenue)
+            (cond ((null (cdr option-list)) (get-suc-ave node road-atom))
+                  (t (append (get-suc-ave node road-atom) (get-suc-intersec-new node (cdr option-list))))))
+          ((equal type-of-head 'highway)
+             (let ((a-points (get road-atom 'access-points)))
+               (cond ((null (cdr option-list)) (get-suc-highway node road-atom a-points))
+                     (t (append (get-suc-highway node road-atom a-points) 
+                                (get-suc-intersec-new node (cdr option-list))))))))))
+
+(defun get-suc-highway (node hway a-points)
+  ;; returns a list of triples (new-point road arc-cost) who are successors of node.
+  ;; The node is on highway atom 'hway' with access points 'a-points'.
+  (let ((hway-name (symbol-name hway))
+        (node-state (get node 'state)))
+    (cond ((equal node-state (car a-points))
+              (list (list (cadr a-points) hway-name (get-hway-cost node-state (cadr a-points)))))
+          ((and (equal node-state (cadr a-points)) (not (null (cddr a-points))))
+              (list (list (car a-points) hway-name (get-hway-cost node-state (car a-points)))
+                    (list (caddr a-points) hway-name (get-hway-cost node-state (caddr a-points)))))
+          ((and (equal node-state (cadr a-points)) (null (cddr a-points)))
+              (list (list (car a-points) hway-name (get-hway-cost node-state (cadr a-points)))))
+          (t (get-suc-highway node hway (cdr a-points))))))
+
+(defun get-hway-cost (state1 state2)
+  ;; Returns the arc cost between state1 and state2 on highway.
+  (let ((diff-x (- (car state1) (car state2)))
+        (diff-y (- (cadr state1) (cadr state2))))
+    (* 1.5 (sqrt (+ (* diff-x diff-x) (* diff-y diff-y))))))
+
+(defun on-avenue (node)
+  ;; determines whether node is on avenues
+  ;; If yes, return the atom of avenue; Otherwise, return NIL.
+  (let* ((road-name (get node 'road))
+         (road-atom (intern road-name))
+         (road-type (get road-atom 'type)))
+    (cond ((equal road-type 'avenue) road-atom)
+          (t NIL))))
+
+(defun get-suc-ave (node ave-obj)
+  ;; returns a list of triples (new-point road arc-cost) who are successors of node.
+  ;; The node is on avenue 'ave-obj' but not on an intersection.
+    (let* ((x-y (get node 'state))
+           (x-coord (car x-y))
+           (y-coord (cadr x-y))
+           (up-neighbor (get-ave-neighbor (+ y-coord 1) ave-obj))
+           (down-neighbor (get-ave-neighbor (- y-coord 1) ave-obj))
+           (ave-name (get ave-obj 'name)))
+      (cond ((and (null up-neighbor) (not (null down-neighbor)))
+                (list (list down-neighbor ave-name 2)))
+            ((and (not (null up-neighbor)) (null down-neighbor))
+                (list (list up-neighbor ave-name 2)))
+            ((and (not (null up-neighbor)) (not (null down-neighbor)))
+                (list (list down-neighbor ave-name 2) (list up-neighbor ave-name 2)))
+            (t NIL))))
+
+(defun get-ave-neighbor (y-coord ave-obj)
+  ;; returns (x, y-coord) if it is on ave-obj.
+  ;; Otherwise, return NIL.
+    (let ((x-coord (get ave-obj 'x-coord))
+          (y-start (get ave-obj 'y-coord-start))
+          (y-end (get ave-obj 'y-coord-end)))
+      (cond ((or (< y-coord y-start) (> y-coord y-end)) NIL)
+            (t (list x-coord y-coord)))))
+
+(defun on-street (node)
+  ;; determines whether node is on city-street.
+  ;; If yes, return the atom of street; Otherwise, return NIL.
+  (let* ((road-name (get node 'road))
+         (road-atom (intern road-name)))
+    (cond ((equal (get road-atom 'type) 'city-street) road-atom)
+          (t NIL))))
+
+(defun get-suc-street (node street-obj)
+  ;; returns a list of triples (new-point road arc-cost) who are successors of node.
+  ;; The node is on street 'street-obj' but not on an intersection.
+    (let* ((x-y (get node 'state))
+           (x-coord (car x-y))
+           (y-coord (cadr x-y))
+           (left-neighbor (get-street-neighbor (- x-coord 1) street-obj))
+           (right-neighbor (get-street-neighbor (+ x-coord 1) street-obj))
+           (street-name (get street-obj 'name)))
+      (cond ((and (null left-neighbor) (not (null right-neighbor)))
+                (list (list right-neighbor street-name 2)))
+            ((and (not (null left-neighbor)) (null right-neighbor))
+                (list (list left-neighbor street-name 2)))
+            ((and (not (null left-neighbor)) (not (null right-neighbor)))
+                (list (list left-neighbor street-name 2) (list right-neighbor street-name 2))))))
+
+(defun get-street-neighbor (x-coord street-obj)
+  ;; Test whether street neighbor is on the street (in the bound of street-obj).
+  ;; If found, returns the (x, y) of neighbor; Otherwise return NIL.
+    (let ((x-start (get street-obj 'x-coord-start))
+          (x-end (get street-obj 'x-coord-end))
+          (y-coord (get street-obj 'y-coord)))
+      (cond ((or (< x-coord x-start) (> x-coord x-end)) NIL)
+            (t (list x-coord y-coord)))))
 
 (defun goal-test-CM? (node goal-point)
 ; node is a node and goal-point is a 2-tuple giving the coordinates
-;    of the goal point on the map
+;    of the goal22 point on the map
 ; return true if the state for this node is goal-point
-; YOU MUST WRITE THIS FUNCTION
-)
+    (cond ((equal (get node 'state) goal-point) t)
+          (t NIL)))
 
 (defun get-goal-estimate-CM (point goal-point)
 ; point and goal-point are both 2-tuples representing points 
 ;   on the map 
 ; return an estimate of the cost of getting from point to goal-point
-; YOU MUST WRITE THIS FUNCTION
-)
+    (get-distance point goal-point))
+
+(defun get-distance (point1 point2)
+  ;; gets the distance between point1 and piont2
+    (let ((diff-x (- (car point2) (car point1)))
+          (diff-y (- (cadr point2) (cadr point1))))
+      (sqrt (+ (* diff-x diff-x) (* diff-y diff-y)))))
+
+(load "CityMapDatabase-14.lisp")
+(CityMap-setup)
+(print (sample-test))
