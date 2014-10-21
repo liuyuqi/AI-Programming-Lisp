@@ -269,9 +269,7 @@
     (setf (get n 'parent) parent)
     (setf (get n 'best-path-cost) cost-of-short-path)
     (setf (get n 'least-cost-estimate) (+ cost-of-short-path (get n 'cost-to-goal-estimate)))
-    (cond ((< cost-of-short-path old-gValue)
-                (list (get-new-open-list currOpenList n) closedList))
-          (t open-closed))))
+    (list (get-new-open-list currOpenList n) closedList)))
 
 (defun get-new-open-list (openList n)
   ;; re-sort the list with the modified element n
@@ -306,9 +304,41 @@
   ; update the properties of node n and, if necessary, its
   ;   descendants on open and closed lists.
   ; return the adjusted open-closed list
-; YOU MUST WRITE THIS FUNCTION
-)
+  (let ((curr-open-list (car open-closed))
+        (curr-closed-list (cadr open-closed))
+        (new-arc-cost (- cost-of-short-path (get parent 'best-path-cost)))
+        (old-gValue (get n 'best-path-cost))
+    (setf (get n 'arc-cost) new-arc-cost)
+    (setf (get n 'action) action)
+    (setf (get n 'parent) parent)
+    (setf (get n 'best-path-cost) cost-of-short-path)
+    (setf (get n 'least-cost-estimate) (+ cost-of-short-path (get n 'cost-to-goal-estimate)))
+    (list (sort-open-list (change-f-g-chain (successor-fn n) curr-open-list successor-fn) curr-open-list) 
+          (curr-closed-list)))))
 
+(defun sort-open-list (out-of-order-lst open-lst)
+  ;; sort the open list, changing the position of elems in out-of-order-lst only.
+  (cond ((null out-of-order-lst) open-lst)
+        (t (let* ((head (car out-of-order-lst))
+                  (new-open-lst (get-new-open-list open-lst head)))
+             (cond ((null (cdr out-of-order-lst)) new-open-lst)
+                   (t (sort-open-list (cdr out-of-order-lst) new-open-lst)))))))
+
+(defun change-f-g-chain (to-change-lst open-list successor-fn)
+  ;; change the f and g value of all descendents of nodes in to-change-list.
+  ;; Returns a list including the nodes that are on the open list.
+  (cond ((null to-change-lst) NIL)
+        (t (let* ((head-to-change (car to-change-lst))
+               (suc-of-head (successor-fn head-to-change))
+               (parent-gValue (get (get head-of-change 'parent) 'best-path-cost))
+               (self-new-gValue (+ parent-gValue (get head-of-change 'arc-cost)))
+               (self-new-fValue (+ self-gValue (get head-of-change 'cost-to-goal-estimate))))
+           (setf (get head-of-change 'best-path-cost) self-new-gValue)
+           (setf (get head-of-change 'least-cost-estimate) self-new-fValue)
+           (cond ((state-on head-of-change open-list)
+                    (cons head-of-change (change-f-g-chain (cdr to-change-lst) open-list successor-fn)))
+                 (t (change-f-g-chain (append suc-of-head (cdr to-change-lst)) open-list successor-fn)))))))
+                 
 (defun state-on (state lst)
 ;(break "entering state-on")
 ; state is a state represented as a 2-tuple giving the
