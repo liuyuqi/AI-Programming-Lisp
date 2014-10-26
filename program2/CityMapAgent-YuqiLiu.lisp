@@ -1,3 +1,9 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;
+;;; CityMapAgent Submission: Yuqi Liu.
+;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
 (defun sample-test ()
 ; This is an example call to CityMapAgent
    (CityMapAgent '(118 131) "thirtyfirst" '(120 123) 'goal-test-CM? 'successors-CM 'get-goal-estimate-CM))
@@ -274,12 +280,15 @@
 (defun get-new-open-list (openList n)
   ;; re-sort the list with the modified element n
   (let ((listWithoutN (strip openList n)))
-    (cond ((null OpenList) (list n))
-          (t (let ((f-value-of-head (get (car openList) 'least-cost-estimate))
-                (f-value-of-new (get n 'least-cost-estimate)))
-            (cond ((< f-value-of-new f-value-of-head)
-                        (cons n openList))
-                  (t (cons (car openList) (get-new-open-list (cdr openList) n)))))))))
+    (get-new-open-list-tail listWithoutN n)))
+
+(defun get-new-open-list-tail (listWithoutN n)
+  ;; perform an insersion sort of n into listWithoutN.
+  (cond ((null listWithoutN) (list n))
+        (t (let ((f-value-of-head (get (car listWithoutN) 'least-cost-estimate))
+                 (f-value-of-new (get n 'least-cost-estimate)))
+             (cond ((<= f-value-of-new f-value-of-head) (cons n listWithoutN))
+                   (t (cons (car listWithoutN) (get-new-open-list (cdr listWithoutN) n))))))))
 
 (defun strip (lst n)
   ;; removes the element 'n' from the openList 'lst',
@@ -307,38 +316,89 @@
   (let ((curr-open-list (car open-closed))
         (curr-closed-list (cadr open-closed))
         (new-arc-cost (- cost-of-short-path (get parent 'best-path-cost)))
-        (old-gValue (get n 'best-path-cost))
+        (old-gValue (get n 'best-path-cost)))
     (setf (get n 'arc-cost) new-arc-cost)
     (setf (get n 'action) action)
     (setf (get n 'parent) parent)
     (setf (get n 'best-path-cost) cost-of-short-path)
     (setf (get n 'least-cost-estimate) (+ cost-of-short-path (get n 'cost-to-goal-estimate)))
-    (list (sort-open-list (change-f-g-chain (successor-fn n) curr-open-list successor-fn) curr-open-list) 
-          (curr-closed-list)))))
+    (list (sort-open-list (get-node-list (change-f-g-chain (funcall successor-fn n)
+                                                           curr-open-list 
+                                                           successor-fn 
+                                                           NIL)) 
+                          curr-open-list)
+          curr-closed-list)))
 
 (defun sort-open-list (out-of-order-lst open-lst)
   ;; sort the open list, changing the position of elems in out-of-order-lst only.
+  ;; BUGGY~
   (cond ((null out-of-order-lst) open-lst)
         (t (let* ((head (car out-of-order-lst))
                   (new-open-lst (get-new-open-list open-lst head)))
              (cond ((null (cdr out-of-order-lst)) new-open-lst)
                    (t (sort-open-list (cdr out-of-order-lst) new-open-lst)))))))
 
-(defun change-f-g-chain (to-change-lst open-list successor-fn)
+(defun get-node-list (suc-list)
+  ;; converts successor list into the form of list of nodes.
+  (cond ((null suc-list) NIL)
+        (t (let* ((head-of-lst (car suc-list))
+                  (head-xy (car head-of-lst))
+                  (node-obj (intern (concatenate 'string
+                                                 "Node-"
+                                                 (prin1-to-string (car head-xy))
+                                                 (prin1-to-string (cadr head-xy))))))
+             (cond ((null (cdr suc-list)) (list node-obj))
+                   (t (cons node-obj (get-node-list (cdr suc-list)))))))))
+
+(defun change-f-g-chain (to-change-lst open-list successor-fn changed-lst)
   ;; change the f and g value of all descendents of nodes in to-change-list.
   ;; Returns a list including the nodes that are on the open list.
   (cond ((null to-change-lst) NIL)
         (t (let* ((head-to-change (car to-change-lst))
-               (suc-of-head (successor-fn head-to-change))
-               (parent-gValue (get (get head-of-change 'parent) 'best-path-cost))
-               (self-new-gValue (+ parent-gValue (get head-of-change 'arc-cost)))
-               (self-new-fValue (+ self-gValue (get head-of-change 'cost-to-goal-estimate))))
-           (setf (get head-of-change 'best-path-cost) self-new-gValue)
-           (setf (get head-of-change 'least-cost-estimate) self-new-fValue)
-           (cond ((state-on head-of-change open-list)
-                    (cons head-of-change (change-f-g-chain (cdr to-change-lst) open-list successor-fn)))
-                 (t (change-f-g-chain (append suc-of-head (cdr to-change-lst)) open-list successor-fn)))))))
-                 
+                  (head-xy (car head-to-change))
+                  (head-node (intern (concatenate 'string "Node-" 
+                                                  (prin1-to-string (car head-xy))
+                                                  (prin1-to-string (cadr head-xy)))))
+                  (suc-of-head (funcall successor-fn head-node))
+                  (parent-gValue (get (get head-node 'parent) 'best-path-cost))
+                  (self-new-gValue (+ parent-gValue (get head-node 'arc-cost)))
+                  (self-new-fValue (+ self-new-gValue (get head-node 'cost-to-goal-estimate))))
+             (setf (get head-node 'best-path-cost) self-new-gValue)
+             (setf (get head-node 'least-cost-estimate) self-new-fValue)
+             (change-chain-tail head-to-change head-xy suc-of-head open-list to-change-lst successor-fn changed-lst)))))
+
+(defun change-chain-tail (head-to-change head-xy suc-of-head open-list to-change-lst successor-fn changed-lst)
+  ;; does the remaining job for change-f-g-chain function.
+  (cond ((state-on head-xy open-list)
+            (let ((next-iter (change-f-g-chain (cdr to-change-lst) open-list successor-fn (cons head-to-change changed-lst))))
+              (cond ((null next-iter) (list head-to-change))
+                    (t (cons head-to-change next-iter)))))
+        (t (change-f-g-chain (get-new-to-change-list suc-of-head (cdr to-change-lst) changed-lst)
+                             open-list 
+                             successor-fn
+                             (cons head-to-change changed-lst)))))
+
+(defun get-new-to-change-list (suc-of-head old-to-change-lst changed-lst)
+  ;; Returns a list with elements in suc-of-head all eliminated by the following rule:
+  ;;   if they are in the old-to-change-lst or changed-lst, then eliminate those elements.
+  (let ((new-successors (eliminate-lst-lst-orig changed-lst old-to-change-lst suc-of-head)))
+    (cond ((null new-successors) old-to-change-lst)
+          (t (append new-successors old-to-change-lst)))))
+
+(defun eliminate-lst-lst-orig (lst1 lst2 orig-lst)
+  ;; Removes lst1 from lst2
+  ;; Returns the modified lst2
+  (cond ((null orig-lst) NIL)
+        ((or (in-list (car orig-lst) lst1) (in-list (car orig-lst) lst2))
+             (eliminate-lst-lst-orig lst1 lst2 (cdr orig-lst)))
+        (t (cons (car orig-lst) (eliminate-lst-lst-orig lst1 lst2 (cdr orig-lst))))))
+
+(defun in-list (elem lst)
+  ;; Returns T if elem is in lst, otherwise return NIL
+  (cond ((null lst) NIL)
+        ((equal elem (car lst)) T)
+        (t (in-list elem (cdr lst)))))
+ 
 (defun state-on (state lst)
 ;(break "entering state-on")
 ; state is a state represented as a 2-tuple giving the
@@ -434,7 +494,7 @@
 
 (defun successors-CM (node)
   ;; a wrapper and debugger function of successor-CM
-  (print (successors-CM-new node)))
+  (successors-CM-new node))
 
 (defun successors-CM-new (node)
 ; node is a node in the search graph
@@ -447,7 +507,8 @@
           (avenue-obj (on-avenue node)))
         (cond ((not (null intersec-obj)) (get-suc-intersec node intersec-obj))
               ((not (null street-obj)) (get-suc-street node street-obj))
-              ((not (null avenue-obj)) (get-suc-ave node avenue-obj)))))
+              ((not (null avenue-obj)) (get-suc-ave node avenue-obj))
+              (t (successors-CM-new node)))))
 
 (defun on-intersection (node)
   ;; determines whether node is on intersection.
@@ -589,6 +650,3 @@
           (diff-y (- (cadr point2) (cadr point1))))
       (sqrt (+ (* diff-x diff-x) (* diff-y diff-y)))))
 
-(load "CityMapDatabase-14.lisp")
-(CityMap-setup)
-(print (sample-test))
