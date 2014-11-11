@@ -1,4 +1,4 @@
-(load "~carberry/Task-planner-structures-14.lisp")
+(load "Task-planner-structures-14.lisp")
 (setf act_cook (make-action
                :act_name 'Cook))
 (setf act_wrap (make-action

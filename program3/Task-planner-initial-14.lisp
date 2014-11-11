@@ -71,14 +71,25 @@
 ; open_list is a list of structures of type partial_plan
 ; return true if any of these is a complete plan --- ie., a plan
 ;   with no open preconditions
-; YOU MUST WRITE THIS FUNCTION
-)
+    (cond ((null open_list) NIL)
+          ((null (partial_plan-open_precs (car open_list)))
+                (car open_list))
+          (t (complete-plan? (cdr open_list)))))
 
 (defun select (open_list)
 ; selects the partial plan on open_list that has the fewest actions
 ; and returns it
-; YOU MUST WRITE THIS FUNCTION
-)
+    (cond ((null (cdr open_list)) (car open_list))
+          (t (let* ((first_plan_action_num (get-number-of-nodes (partial_plan-plan_nodes (car open_list))))
+                    (sec_plan_action_num (get-number-of-nodes (partial_plan-plan_nodes (cadr open_list)))))
+               (cond ((>= first_plan_action_num sec_plan_action_num)
+                        (select (cdr open_list)))
+                     (t (select (cons (car open_list) (cddr open_list)))))))))
+
+(defun get-number-of-nodes (node_list)
+  ;; returns the number of nodes in node_list
+    (cond ((null node_list) 0)
+          (t (+ 1 (get-number-of-nodes (cdr node_list))))))
 
 
 (defun remove-from-open (part_plan open_list)
@@ -102,6 +113,7 @@
 (setf *print-length* nil)
 (terpri)
 (terpri)
+;
 ;(princ "*** The partial plan that I have selected to work on is the following:")
 ;(terpri)(terpri)
 ;(pprint part_plan)
@@ -178,8 +190,49 @@
 ;    type partial_plan) that represent expansions of part_plan that satisfy 
 ;    open_prec
 ; any new partial plans added to open_list must be consistent
-; YOU MUST WRITE THIS FUNCTION
-)
+    (cond ((null action_nodes_existing) open_list)
+          (t (let* ((node_Aj (open_precondition-node open_prec))
+                    (node_Ai (car action_nodes_existing))
+                    (new_part_plan (set-new-partial-plan part_plan open_prec node_Ai node_Aj)))
+             (cond ((consistent? new_part_plan) (cons new_part_plan open_list))
+                   (t (expand-partial-plan-with-existing-actions part_plan
+                                                                 open_prec
+                                                                 open_list
+                                                                 (cdr action_nodes_existing))))))))
+
+(defun set-new-partial-plan (old_part_plan p node_Ai node_Aj)
+  ;; Returns a structure of type partial_plan with the following updates:
+  ;; 1. remove p from the open_precondition of part plan;
+  ;; 2. Adds causal-link node_Ai -> node_Aj (p);
+  ;; 3. Adds order constraint node_Ai < node_Aj;
+  (let* ((new_open_precs (remove-precondition p (partial_plan-open_precs old_part_plan)))
+         (new_causal_links (cons (create-causal-link node_Ai node_Aj p)
+                                 (partial_plan-causal_links old_part_plan)))
+         (new_order_constraints (cons (create-order-constraint node_Ai node_Aj)
+                                      (partial_plan-order_constraints old_part_plan)))
+         (plan_nodes (partial_plan-plan_nodes old_part_plan)))
+    (create-new-part-plan plan_nodes new_causal_links new_order_constraints new_open_precs)))
+
+(defun create-causal-link (node_Ai node_Aj p)
+  ;; Returns a new structure of type causal_link where:
+  ;;   plan_node_1 = node_Ai, plan_node_2 = node_Aj, protected_prop = p.
+    (make-causal_link :plan_node_1 node_Ai
+                      :plan_node_2 node_Aj
+                      :protected_prop (open_precondition-precondition p)))
+
+(defun create-order-constraint (node_Ai node_Aj)
+  ;; Returns a new structure of type order_constraint where:
+  ;;   before_node = node_Ai, after_node = node_Aj.
+    (make-order_constraint :before_node node_Ai
+                           :after_node node_Aj))
+
+(defun create-new-part-plan (pnodes clinks oconstraints oprecs)
+  ;; Returns a new structure of type partial_plan where:
+  ;;   plan_nodes = pnodes, causal_links = clinks, order_constraints = oconstraints, open_precs = oprecs.
+    (make-partial_plan :plan_nodes pnodes
+                       :causal_links clinks
+                       :order_constraints oconstraints
+                       :open_precs oprecs))
 
 (defun expand-partial-plan-with-new-actions 
     (part_plan open_prec open_list action_nodes_new)
@@ -193,16 +246,83 @@
 ;    of type partial_plan) that represent expansions of part_plan that 
 ;    satisfy open_prec
 ; any new partial plans added to open list must be consistent
-; YOU MUST WRITE THIS FUNCTION
-)
+    (cond ((null action_nodes_new) open_list)
+          (t (let* ((node_Aj (open_precondition-node open_prec))
+                    (node_Ai (car action_nodes_new))
+                    (new_part_plan (set-new-partial-plan-with-new-action part_plan 
+                                                                         open_prec 
+                                                                         node_Ai 
+                                                                         node_Aj)))
+             (cond ((consistent? new_part_plan) (cons new_part_plan open_list))
+                   (t (expand-partial-plan-with-new-actions part_plan
+                                                            open_prec
+                                                            open_list
+                                                            (cdr action_nodes_new))))))))
+
+(defun set-new-partial-plan-with-new-action (old_part_plan p node_Ai node_Aj)
+  ;; Returns a structure of type partial_plan with the following updates:
+  ;; 1. adds node_Ai to PLAN_NODES in PARTIAL_PLAN;
+  ;; 2. adds START < node_Ai and node_Ai < FINISH and node_Ai < node_Aj to ORDER_CONSTRAINTS in PARTIAL_PLAN;
+  ;; 3. removes p from the OPEN_PRECONDITIONS in PARTIAL_PLAN and
+  ;;      adds preconditions of node_Ai to OPEN_PRECONDITIONS in PARTIAL_PLAN.
+  ;; 4. adds node_Ai -> node_Aj (p) to CAUSAL_LINKS in PARTIAL_PLAN.
+    (let* ((new_plan_nodes (cons node_Ai (partial_plan-plan_nodes old_part_plan)))
+           (start_node (get-start-node new_plan_nodes))
+           (finish_node (get-finish-node new_plan_nodes))
+           (new_order_constraints (append (list (create-order-constraint start_node node_Ai))
+                                          (list (create-order-constraint node_Ai finish_node))
+                                          (list (create-order-constraint node_Ai node_Aj))
+                                          (partial_plan-order_constraints old_part_plan)))
+           (new_open_precs (append (form-prec-list node_Ai (plan_node-preconditions node_Ai))
+                                   (remove-precondition p (partial_plan-open_precs old_part_plan))))
+           (new_causal_links (cons (create-causal-link node_Ai node_Aj p)
+                                   (partial_plan-causal_links old_part_plan))))
+      (create-new-part-plan new_plan_nodes new_causal_links new_order_constraints new_open_precs)))
+
+(defun form-prec-list (n literals)
+  ;; Returns a list of structures of type open_precondition.
+    (cond ((null literals) NIL)
+          ((null (cdr literals))
+            (list (make-open_precondition :precondition (car literals)
+                                          :node n)))
+          (t (cons (make-open_precondition :precondition (car literals)
+                                           :node n)
+                   (form-prec-list n (cdr literals))))))
 
 (defun consistent? (new_part_plan)
 ; new_part_plan is a structure of type partial_plan
 ; return true if it is consistent --- that is, the protected
 ;   preconditions on its causal links are not threatened by any
 ;   of its actions
-; YOU MUST WRITE THIS FUNCTION
-)
+    (check-consistency (partial_plan-causal_links new_part_plan)))
+
+(defun check-consistency (causal_links)
+  ;; causal_links is a list of causal links that are in a partial plan.
+  ;; Returns T if consistent, otherwise return NIL.
+    (cond ((null causal_links) T)
+          ((null (cdr causal_links)) T)
+          (t (let ((result (check-consistency-single (car causal_links) (cdr causal_links))))
+                (cond ((null result) (check-consistency (cdr causal_links)))
+                      (t NIL))))))
+
+(defun check-consistency-single (clink clink_lst)
+  ;; clink is a single causal link within a partial plan.
+  ;; clink_lst is a list of causal links within the same partial plan.
+  ;; clink is not included in clink_lst.
+  ;; Returns NIL if clink is not conflict with anyone in clink_lst.
+  ;; Returns T if any conflict is found.
+    (cond ((null clink_lst) NIL)
+          (t (let* ((clink1_node2 (causal_link-plan_node_2 clink))
+                    (clink2_node2 (causal_link-plan_node_2 (car clink_lst)))
+                    (clink1_pname (literal-pname (causal_link-protected_prop clink)))
+                    (clink1_sign (literal-sign (causal_link-protected_prop clink)))
+                    (clink2_pname (literal-pname (causal_link-protected_prop (car clink_lst))))
+                    (clink2_sign (literal-sign (causal_link-protected_prop (car clink_lst)))))
+               (cond ((and (equal clink1_node2 clink2_node2)
+                          (equal clink1_pname clink2_pname)
+                          (not (equal clink1_sign clink2_sign)))
+                        T)
+                     (t (check-consistency-single clink (cdr clink_lst))))))))
 
 
 (defun literal-is-member-of (literal literal_list)
@@ -419,17 +539,10 @@
      (t (princ (constant-cname (car params)))
         (princ " ")
         (print-parameters (cdr params)))))
-                
 
-        
-                        
-                                    
-                                     
-                         
+;; ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; PROGRAM ENTRY
 
-
-                                   
-                                      
-
-                                
-                                      
+(load "lisp-init.lisp")
+(load "Task-planner-testcases-14.lisp")
+(testing)
