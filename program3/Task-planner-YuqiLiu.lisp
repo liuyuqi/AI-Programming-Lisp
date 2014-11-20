@@ -190,15 +190,22 @@
 ;    type partial_plan) that represent expansions of part_plan that satisfy 
 ;    open_prec
 ; any new partial plans added to open_list must be consistent
+;(print "in function expand-partial-plan-with-existing-actions, open list is now length: ")
+;(print (length open_list))
     (cond ((null action_nodes_existing) open_list)
           (t (let* ((node_Aj (open_precondition-node open_prec))
                     (node_Ai (car action_nodes_existing))
-                    (new_part_plan (set-new-partial-plan part_plan open_prec node_Ai node_Aj)))
-             (cond ((consistent? new_part_plan) (cons new_part_plan open_list))
-                   (t (expand-partial-plan-with-existing-actions part_plan
-                                                                 open_prec
-                                                                 open_list
-                                                                 (cdr action_nodes_existing))))))))
+                    (new_part_plan (set-new-partial-plan part_plan open_prec node_Ai node_Aj))
+                    (conflict_list (consistent? new_part_plan)))
+             (cond ((equal T conflict_list) (cons new_part_plan open_list))
+                   (t (let ((new_open_list (try-to-revise-inconsistent-plan (list (list new_part_plan conflict_list))
+                                                                                  open_list)))
+                        (cond ((not (equal open_list new_open_list)) new_open_list)
+                              (t ;(print "(expand-partial-plan-with-existing-actions) trying other existing options... ") 
+                                 (expand-partial-plan-with-existing-actions part_plan
+                                                                            open_prec
+                                                                            open_list
+                                                                            (cdr action_nodes_existing)))))))))))
 
 (defun set-new-partial-plan (old_part_plan p node_Ai node_Aj)
   ;; Returns a structure of type partial_plan with the following updates:
@@ -208,8 +215,9 @@
   (let* ((new_open_precs (remove-precondition p (partial_plan-open_precs old_part_plan)))
          (new_causal_links (cons (create-causal-link node_Ai node_Aj p)
                                  (partial_plan-causal_links old_part_plan)))
-         (new_order_constraints (cons (create-order-constraint node_Ai node_Aj)
-                                      (partial_plan-order_constraints old_part_plan)))
+         (new_order_constraints (remove-duplicate-order-constraint 
+                                    (cons (create-order-constraint node_Ai node_Aj)
+                                          (partial_plan-order_constraints old_part_plan))))
          (plan_nodes (partial_plan-plan_nodes old_part_plan)))
     (create-new-part-plan plan_nodes new_causal_links new_order_constraints new_open_precs)))
 
@@ -234,6 +242,101 @@
                        :order_constraints oconstraints
                        :open_precs oprecs))
 
+(defun try-to-revise-inconsistent-plan (inconsistent_list open_list)
+  ;; tries to revise a conflict plan.
+  ;;   format of items in inconsistent_list: (inconststant_plan conflict_list)
+  ;; Returns an open_list with revised plan.
+    (cond ((null inconsistent_list) open_list)
+          (t (let* ((item (car inconsistent_list))
+                    (inconsistent_plan (car item))
+                    (conflict_list (cadr item))
+                    (fixed_plans (fix-inconsistent-plan inconsistent_plan conflict_list))
+                    (fixed_plan_1 (car fixed_plans))
+                    (fixed_plan_2 (cadr fixed_plans))
+                    (conflict_list_1 (consistent? fixed_plan_1))
+                    (conflict_list_2 (consistent? fixed_plan_2))
+                    (new_inconsistent_list (insert-new-inconsistent-list inconsistent_list
+                                                                         fixed_plan_1 fixed_plan_2 
+                                                                         conflict_list_1 conflict_list_2))
+                    (new_open_list (insert-new-open-list open_list 
+                                                         fixed_plan_1 fixed_plan_2 
+                                                         conflict_list_1 conflict_list_2)))
+   ;            (terpri) (terpri)
+   ;            (print "in function try-to-revise-inconsistent-plan, length of new_inconsistent_list is ")
+   ;            (print (length new_inconsistent_list))
+   ;            (print "in function try-to-revise-inconsistent-plan, length of new_open_list is ")
+   ;            (print (length new_open_list))
+               (try-to-revise-inconsistent-plan new_inconsistent_list new_open_list)))))
+
+(defun insert-new-open-list (old_open_list plan1 plan2 conflict_list_1 conflict_list_2)
+  ;; arguments: conflict_list: T if corresponding plan is consistent,
+  ;;                           <inconsistent_list> if inconsistent,
+  ;;                           NIL if unavailable.
+  ;; Return an adjusted open_list.
+    (cond ((and (equal T conflict_list_1) (equal T conflict_list_2))
+            (append (list plan1) (list plan2) old_open_list))
+          ((and (not (equal T conflict_list_1)) (equal T conflict_list_2))
+            (append (list plan2) old_open_list))
+          ((and (equal T conflict_list_1) (not (equal T conflict_list_2)))
+            (append (list plan1) old_open_list))
+          (t old_open_list)))
+
+(defun insert-new-inconsistent-list (old_inconsistent_list plan1 plan2 conflict_list_1 conflict_list_2)
+  ;; arguments: conflict_list: same as insert-new-open-list function.
+  ;; Returns an adjusted inconsistent list: adding new inconsistent items, removing the head of the old list.
+    (cond ((and (not (atom conflict_list_1)) (not (atom conflict_list_2)))
+            (cons (list plan1 conflict_list_1) 
+                  (cons (list plan2 conflict_list_2) 
+                        (cdr old_inconsistent_list))))
+          ((and (atom conflict_list_1) (not (atom conflict_list_2)))
+            (cons (list plan2 conflict_list_2) 
+                  (cdr old_inconsistent_list)))
+          ((and (not (atom conflict_list_1)) (atom conflict_list_2))
+            (cons (list plan1 conflict_list_1) 
+                  (cdr old_inconsistent_list)))
+          (t (cdr old_inconsistent_list))))
+
+(defun fix-inconsistent-plan (inconsistent_plan conflict_list)
+  ;; tries to fix the inconsistent plan.
+  ;; Returns a list of two new fixed plans (plan1 plan2).
+  ;;    of which one with Aj < Ak, the other with Ak < Ai.
+  ;; If any plan is invalid, place NIL.
+    (let* ((conf (car conflict_list))
+           (clink (conflict-causal_link conf))
+           (node_Ai (causal_link-plan_node_1 clink))
+           (node_Aj (causal_link-Plan_node_2 clink))
+           (node_Ak (conflict-node conf))
+           (new_order_const_1 (create-order-constraint node_Aj node_Ak))
+           (new_order_const_2 (create-order-constraint node_Ak node_Ai))
+           (plan_nodes (partial_plan-plan_nodes inconsistent_plan))
+           (causal_links (partial_plan-causal_links inconsistent_plan))
+           (order_constraints_1 (cons new_order_const_1 (partial_plan-order_constraints inconsistent_plan)))
+           (order_constraints_2 (cons new_order_const_2 (partial_plan-order_constraints inconsistent_plan)))
+           (open_preconditions (partial_plan-open_precs inconsistent_plan))
+           (new_plan_1 (create-new-part-plan plan_nodes causal_links order_constraints_1 open_preconditions))
+           (new_plan_2 (create-new-part-plan plan_nodes causal_links order_constraints_2 open_preconditions)))
+      (check-availability-new-plans new_plan_1 new_plan_2 node_Ai node_Aj)))
+
+(defun check-availability-new-plans (plan1 plan2 node_Ai node_Aj)
+  ;; check whether plan1 and plan2 is available.
+  ;; Returns a list of plans (plan1 plan2) if available. Place NIL if any plan is not available.
+    (let* ((nodes1 (partial_plan-plan_nodes plan1))
+           (nodes2 (partial_plan-plan_nodes plan2))
+           (start_node_2 (get-start-node nodes2))
+           (finish_node_1 (get-finish-node nodes1))
+           (available_plan_1 (and (not (equal finish_node_1 node_Aj))
+                                  (no-cycles plan1)))
+           (available_plan_2 (and (not (equal start_node_2 node_Ai))
+                                  (no-cycles plan2))))
+   ;   (print "In function check-availability-new-plans, available plan 1 and available plan 2 is :")
+   ;   (print available_plan_1)
+   ;   (print available_plan_2)
+      (cond ((null available_plan_1)
+                (cond ((null available_plan_2) (list NIL NIL))
+                      (t (list NIL plan2))))
+            ((null available_plan_2) (list plan1 NIL))
+            (t (list plan1 plan2)))))
+
 (defun expand-partial-plan-with-new-actions 
     (part_plan open_prec open_list action_nodes_new)
 ; part_plan is a structure of type partial_plan
@@ -246,18 +349,70 @@
 ;    of type partial_plan) that represent expansions of part_plan that 
 ;    satisfy open_prec
 ; any new partial plans added to open list must be consistent
+;(print "in function expand-partial-plan-with-new-actions, open list is now length: ")
+;(print (length open_list))
     (cond ((null action_nodes_new) open_list)
           (t (let* ((node_Aj (open_precondition-node open_prec))
                     (node_Ai (car action_nodes_new))
                     (new_part_plan (set-new-partial-plan-with-new-action part_plan 
                                                                          open_prec 
                                                                          node_Ai 
-                                                                         node_Aj)))
-             (cond ((consistent? new_part_plan) (cons new_part_plan open_list))
-                   (t (expand-partial-plan-with-new-actions part_plan
-                                                            open_prec
-                                                            open_list
-                                                            (cdr action_nodes_new))))))))
+                                                                         node_Aj))
+                    (conflict_list (consistent? new_part_plan))
+                    (open_precond_spoiled (check-open-precond node_Ai node_Aj part_plan)))
+             (cond ((equal T open_precond_spoiled)
+                        (expand-partial-plan-with-new-actions part_plan
+                                                              open_prec
+                                                              open_list
+                                                              (cdr action_nodes_new)))
+                   ((equal T conflict_list) (cons new_part_plan open_list))
+                   (t (let ((new_open_list (try-to-revise-inconsistent-plan (list (list new_part_plan conflict_list))
+                                                                                  open_list)))
+                        (cond ((not (equal open_list new_open_list)) new_open_list)
+                              (t ;(print "(expand-partial-plan-with-new-actions) trying other new options...  ")
+                                 (expand-partial-plan-with-new-actions part_plan 
+                                                                       open_prec 
+                                                                       open_list 
+                                                                       (cdr action_nodes_new)))))))))))
+
+(defun check-open-precond (node_Ai node_Aj part_plan)
+  ;; checks whether the effects of node_Ai may spoil some open precondition of node_Aj.
+  ;; Returns T if spoils, otherwise return NIL.
+    (let* ((effects_Ai (plan_node-effects node_Ai))
+           (open_precs (partial_plan-open_precs part_plan))
+           (open_precs_in_Aj (select-open-precs-in-node open_precs node_Aj)))
+      (cond ((null open_precs_in_Aj) NIL)
+            (t (check-literal-violation effects_Ai open_precs_in_Aj)))))
+
+(defun select-open-precs-in-node (open_precs node_Aj)
+  ;; select all the literals in list 'open_precs' that are the preconditions of node Aj.
+  ;; If not found, return NIL.
+    (cond ((null open_precs) NIL)
+          ((equal node_Aj (open_precondition-node (car open_precs)))
+                (cons (car open_precs) (select-open-precs-in-node (cdr open_precs) node_Aj)))
+          (t (select-open-precs-in-node (cdr open_precs) node_Aj))))
+
+(defun check-literal-violation (effects_Ai open_precs_in_Aj)
+  ;; checks whether some literal of 'effects_Ai' violates any open_precs_in_Aj.
+  ;; Returns T if violation is found. Otherwise return NIL.
+    (cond ((null effects_Ai) NIL)
+          (t (let* ((effect (car effects_Ai))
+                    (effect_evil (check-literal-violation-single effect open_precs_in_Aj)))
+               (cond ((null effect_evil) (check-literal-violation (cdr effects_Ai) open_precs_in_Aj))
+                     (t T))))))
+
+(defun check-literal-violation-single (effect open_precs)
+  ;; checks whether the effect violates any open_precs.
+  ;; Return T if violation found. Otherwise return NIL.
+    (cond ((null open_precs) NIL)
+          (t (let* ((precond_literal (open_precondition-precondition (car open_precs)))
+                    (effect_sign (literal-sign effect))
+                    (effect_pname (literal-pname effect))
+                    (precond_sign (literal-sign precond_literal))
+                    (precond_pname (literal-pname precond_literal)))
+               (cond ((and (equal effect_pname precond_pname) (not (equal effect_sign precond_sign)))
+                        T)
+                     (t (check-literal-violation-single effect (cdr open_precs))))))))
 
 (defun set-new-partial-plan-with-new-action (old_part_plan p node_Ai node_Aj)
   ;; Returns a structure of type partial_plan with the following updates:
@@ -269,15 +424,31 @@
     (let* ((new_plan_nodes (cons node_Ai (partial_plan-plan_nodes old_part_plan)))
            (start_node (get-start-node new_plan_nodes))
            (finish_node (get-finish-node new_plan_nodes))
-           (new_order_constraints (append (list (create-order-constraint start_node node_Ai))
-                                          (list (create-order-constraint node_Ai finish_node))
-                                          (list (create-order-constraint node_Ai node_Aj))
-                                          (partial_plan-order_constraints old_part_plan)))
+           (new_order_constraints (remove-duplicate-order-constraint 
+                                    (append (list (create-order-constraint start_node node_Ai))
+                                            (list (create-order-constraint node_Ai finish_node))
+                                            (list (create-order-constraint node_Ai node_Aj))
+                                            (partial_plan-order_constraints old_part_plan))))
            (new_open_precs (append (form-prec-list node_Ai (plan_node-preconditions node_Ai))
                                    (remove-precondition p (partial_plan-open_precs old_part_plan))))
            (new_causal_links (cons (create-causal-link node_Ai node_Aj p)
                                    (partial_plan-causal_links old_part_plan))))
       (create-new-part-plan new_plan_nodes new_causal_links new_order_constraints new_open_precs)))
+
+(defun remove-duplicate-order-constraint (lst)
+  ;; removes all duplicate entrys in the order-constraint list.
+    (cond ((null lst) NIL)
+          ((null (cdr lst)) lst)
+          ((in-list (car lst) (cdr lst))
+                (remove-duplicate-order-constraint (cdr lst)))
+          (t (cons (car lst) (remove-duplicate-order-constraint (cdr lst))))))
+
+(defun in-list (item lst)
+  ;; returns T if item is in lst. Otherwise return NIL.
+    (cond ((null lst) NIL)
+          ((equal item (car lst)) T)
+          (t (in-list item (cdr lst)))))
+
 
 (defun form-prec-list (n literals)
   ;; Returns a list of structures of type open_precondition.
@@ -294,35 +465,85 @@
 ; return true if it is consistent --- that is, the protected
 ;   preconditions on its causal links are not threatened by any
 ;   of its actions
-    (check-consistency (partial_plan-causal_links new_part_plan)))
+    (cond ((null new_part_plan) NIL)
+          (t (let* ((nodes (partial_plan-plan_nodes new_part_plan))
+                    (clinks (partial_plan-causal_links new_part_plan))
+                    (order_consts (partial_plan-order_constraints new_part_plan))
+                    (conflict_list (check-consistency new_part_plan nodes clinks order_consts)))
+;               (print "In function consistent?, conflict list is now: ")
+;               (print conflict_list)
+               (cond ((null conflict_list) T)
+                     (t conflict_list))))))
 
-(defun check-consistency (causal_links)
-  ;; causal_links is a list of causal links that are in a partial plan.
-  ;; Returns T if consistent, otherwise return NIL.
-    (cond ((null causal_links) T)
-          ((null (cdr causal_links)) T)
-          (t (let ((result (check-consistency-single (car causal_links) (cdr causal_links))))
-                (cond ((null result) (check-consistency (cdr causal_links)))
-                      (t NIL))))))
+(defun check-consistency (plan nodes clinks order_consts)
+  ;; performs the check-concistency task.
+  ;; Returns a list of structures of type conflict.
+    (cond ((null nodes) NIL)
+          (t (let* ((effects (plan_node-effects (car nodes)))
+                    (all_nodes (partial_plan-plan_nodes plan))
+                    (suspicious_list (get-suspicious-list (car nodes) 
+                                                          effects 
+                                                          clinks)))
+               (cond ((null suspicious_list) (check-consistency plan (cdr nodes) clinks order_consts))
+                     (t 
+                       (let ((conflict_list (check-and-create-conflict-list suspicious_list order_consts))
+                             (tail (check-consistency plan (cdr nodes) clinks order_consts)))
+                         (cond ((null conflict_list) tail)
+                               ((null tail) conflict_list)
+                               (t (append conflict_list tail))))))))))
 
-(defun check-consistency-single (clink clink_lst)
-  ;; clink is a single causal link within a partial plan.
-  ;; clink_lst is a list of causal links within the same partial plan.
-  ;; clink is not included in clink_lst.
-  ;; Returns NIL if clink is not conflict with anyone in clink_lst.
-  ;; Returns T if any conflict is found.
-    (cond ((null clink_lst) NIL)
-          (t (let* ((clink1_node2 (causal_link-plan_node_2 clink))
-                    (clink2_node2 (causal_link-plan_node_2 (car clink_lst)))
-                    (clink1_pname (literal-pname (causal_link-protected_prop clink)))
-                    (clink1_sign (literal-sign (causal_link-protected_prop clink)))
-                    (clink2_pname (literal-pname (causal_link-protected_prop (car clink_lst))))
-                    (clink2_sign (literal-sign (causal_link-protected_prop (car clink_lst)))))
-               (cond ((and (equal clink1_node2 clink2_node2)
-                          (equal clink1_pname clink2_pname)
-                          (not (equal clink1_sign clink2_sign)))
-                        T)
-                     (t (check-consistency-single clink (cdr clink_lst))))))))
+(defun check-and-create-conflict-list (suspicious_list order_consts)
+  ;; performs the order constraint check on the suspicious list.
+  ;;   checks whether there is order constraint to prevent Ak from occuring between Ai and Aj.
+  ;; Return a list of structure of type conflicts.
+    (cond ((null suspicious_list) NIL)
+          (t (let* ((clink (caar suspicious_list))
+                    (nodeK (cadr (car suspicious_list)))
+                    (nodeI (causal_link-plan_node_1 clink))
+                    (nodeJ (causal_link-plan_node_2 clink))
+                    (result_k_i (check-order-const nodeK nodeI order_consts))
+                    (result_j_k (check-order-const nodeJ nodeK order_consts)))
+               (cond ((and (null result_k_i) (null result_j_k))
+                        (cons (create-conflict-structure clink nodeK)
+                              (check-and-create-conflict-list (cdr suspicious_list) order_consts)))
+                     (t (check-and-create-conflict-list (cdr suspicious_list) order_consts)))))))
+
+(defun create-conflict-structure (clink nodeK)
+  ;; returns a structure of type conflict.
+    (make-conflict :causal_link clink
+                   :node nodeK))
+
+(defun check-order-const (before_node after_node order_consts)
+  ;; Checks whether there is an order constraint that before_node < after_node.
+  ;; Returns NIL if there is no constraint. Otherwise, return something else.
+    (cond ((null order_consts) NIL)
+          (t (let ((node1 (order_constraint-before_node (car order_consts)))
+                   (node2 (order_constraint-after_node (car order_consts))))
+               (cond ((and (equal node1 before_node) (equal node2 after_node))
+                        (car order_consts))
+                     (t (check-order-const before_node after_node (cdr order_consts))))))))
+                              
+(defun get-suspicious-list (node effects clinks)
+  ;; find all suspicious conflicts for all clinks that
+  ;;    protected_prop is the protected proposition of a clink, AND
+  ;;    neg protected_prop is member of 'effects', which is a list of literals.
+  ;; ALL members of 'effects' are effects of 'node'.
+  ;; Returns a list of suspicious items. Suspicious item have the following format:
+  ;;    (clink nodeK), where nodeK is the node whose action threatens the clink.
+    (cond ((null clinks) NIL)
+          (t (let* ((clink (car clinks))
+                    (prop_clink (causal_link-protected_prop clink))
+                    (neg_prop_clink (get-neg-literal prop_clink)))
+               (cond ((literal-is-member-of neg_prop_clink effects)
+                        (cons (list clink node) (get-suspicious-list node effects (cdr clinks))))
+                     (t (get-suspicious-list node effects (cdr clinks))))))))
+
+(defun get-neg-literal (l)
+  ;; Returns the negative form of literal 'l'.
+    (cond ((null (literal-sign l))
+             (make-literal :sign 'NEG
+                           :pname (literal-pname l)))
+          (t (make-literal :pname (literal-pname l)))))
 
 
 (defun literal-is-member-of (literal literal_list)
